@@ -1,0 +1,22 @@
+{
+  "name": "kisisel-asistan-saas",
+  "version": "1.0.0",
+  "description": "Modüler, SaaS ve Abonelik Tabanlı Kişisel Asistan Platformu",
+  "private": true,
+  "scripts": {
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix backend && npm run build --prefix frontend",
+    "start": "npm run start --prefix backend"
+  },
+  "keywords": [
+    "saas",
+    "personal-assistant",
+    "finance",
+    "calendar",
+    "notes",
+    "modular-architecture"
+  ],
+  "author": "Kişisel Asistan Core Team",
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,291 @@
+// Kişisel Asistan SaaS Platformu - Veritabanı Şeması
+// SQLite (Geliştirme) ve PostgreSQL (Canlı/Prodüksiyon) ile %100 uyumlu
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// ÇEKİRDEK & KİMLİK DOĞRULAMA (CORE & AUTH & SUBSCRIPTION)
+// -------------------------------------------------------------
+
+model User {
+  id                 String    @id @default(uuid())
+  email              String    @unique
+  passwordHash       String
+  fullName           String
+  avatarUrl          String?
+  role               String    @default("USER") // USER, SUPPORT, ADMIN
+  subscriptionTier   String    @default("FREE") // FREE, PRO, ENTERPRISE
+  subscriptionStatus String    @default("ACTIVE") // ACTIVE, PAST_DUE, CANCELED, TRIALING
+  subscriptionEndsAt DateTime?
+  kvkkConsent        Boolean   @default(true) // KVKK Açık Rıza Onayı
+  isSuspended        Boolean   @default(false) // Müşteri Hizmetleri veya Admin Dondurma
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  // İlişkiler (Multi-tenant izolasyon)
+  refreshTokens    RefreshToken[]
+  accounts         Account[]
+  categories       Category[]
+  transactions     Transaction[]
+  installmentPlans InstallmentPlan[]
+  recurringBills   RecurringBill[]
+  budgets          Budget[]
+  bankConnections  BankConnection[]
+  calendarEvents   CalendarEvent[]
+  notes            Note[]
+
+  // KVKK Denetim Geçmişi İlişkileri
+  performedAuditLogs AuditLog[] @relation("AuditActor")
+  targetedAuditLogs  AuditLog[] @relation("AuditTarget")
+
+  @@index([email])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// -------------------------------------------------------------
+// FİNANS MODÜLÜ (ACCOUNTS, TRANSACTIONS, INSTALLMENTS, BILLS, BUDGETS)
+// -------------------------------------------------------------
+
+model Account {
+  id                  String        @id @default(uuid())
+  userId              String
+  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankConnectionId    String?       // Hangi banka bağlantısına ait olduğu (Açık Bankacılık)
+  bankConnection      BankConnection? @relation(fields: [bankConnectionId], references: [id], onDelete: SetNull)
+  externalAccountId   String?       // Bankanın API'sindeki benzersiz hesap/kart ID'si
+  name                String // Örn: Garanti Vadesiz, İş Bankası Kredi Kartı, Nakit Cüzdan
+  type                String        @default("BANK") // BANK, CREDIT_CARD, CASH, INVESTMENT
+  balance             Float         @default(0.0)
+  currency            String        @default("TRY")
+  bankName            String? // Garanti BBVA, Akbank, Yapı Kredi, vb.
+  accountNumberMasked String? // **** 4589
+  provider            String        @default("MANUAL") // MANUAL, MOCK_OPEN_BANKING, LIVE_OPEN_BANKING
+  creditLimit         Float?        // Kredi kartları için toplam limit (Örn: 100.000 TL)
+  statementDay        Int?          // Kredi kartı hesap kesim günü (Örn: 12)
+  dueDay              Int?          // Kredi kartı son ödeme günü (Örn: 22)
+  iban                String?       // Banka hesapları için IBAN
+  color               String?       @default("#1e293b") // Kartvizit / tema rengi
+  lastSyncedAt        DateTime?
+  isActive            Boolean       @default(true)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  transactions     Transaction[]
+  installmentPlans InstallmentPlan[]
+  recurringBills   RecurringBill[]
+
+  @@index([userId])
+  @@index([bankConnectionId])
+}
+
+model BankConnection {
+  id                   String    @id @default(uuid())
+  userId               String
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankCode             String    // GARANTI, IS_BANK, AKBANK, YAPI_KREDI, QNB, ZIRAAT, ENPARA
+  bankName             String    // Garanti BBVA, Türkiye İş Bankası vb.
+  status               String    @default("CONNECTED") // CONNECTED, EXPIRED, REQUIRES_AUTH, DISCONNECTED
+  consentId            String    // BKM / Açık Bankacılık Rıza ID
+  consentExpiresAt     DateTime  // Rıza geçerlilik süresi (Örn: 180 gün)
+  autoSyncEnabled      Boolean   @default(true)
+  syncFrequencyMinutes Int       @default(15) // Her 15 dakikada bir otomatik çekim
+  lastSyncedAt         DateTime?
+  accountsCount        Int       @default(0)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  accounts             Account[]
+
+  @@unique([userId, bankCode])
+  @@index([userId])
+}
+
+model Category {
+  id        String   @id @default(uuid())
+  userId    String?  // null ise global varsayılan kategori, dolu ise kullanıcıya özel
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String   // Kira, Market, Maaş, Abonelikler, Fatura, vb.
+  type      String   @default("EXPENSE") // EXPENSE, INCOME
+  icon      String   @default("Tag") // Lucide icon adı
+  color     String   @default("#6366f1") // Hex renk kodu
+  createdAt DateTime @default(now())
+
+  transactions     Transaction[]
+  installmentPlans InstallmentPlan[]
+  recurringBills   RecurringBill[]
+  budgets          Budget[]
+
+  @@index([userId])
+}
+
+model Transaction {
+  id                String           @id @default(uuid())
+  userId            String
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId         String
+  account           Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  categoryId        String
+  category          Category         @relation(fields: [categoryId], references: [id])
+  externalTxId      String?          // Bankadan gelen dekont / işlem referans numarası (mükerrer kayıt engeli)
+  amount            Float
+  type              String           @default("EXPENSE") // EXPENSE, INCOME, TRANSFER
+  date              DateTime         @default(now())
+  description       String
+  recipientOrSender String?
+  installmentPlanId String?
+  installmentPlan   InstallmentPlan? @relation(fields: [installmentPlanId], references: [id], onDelete: SetNull)
+  installmentIndex  Int?             // Örn: 3. taksit (3/12)
+  status            String           @default("COMPLETED") // COMPLETED, PENDING
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([userId, date])
+  @@index([accountId])
+  @@index([categoryId])
+  @@index([externalTxId])
+}
+
+model InstallmentPlan {
+  id                    String        @id @default(uuid())
+  userId                String
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId             String
+  account               Account       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  categoryId            String
+  category              Category      @relation(fields: [categoryId], references: [id])
+  title                 String        // Örn: MacBook Pro Alımı, Sigorta Primi
+  totalAmount           Float         // Toplam Borç
+  totalInstallments     Int           // Toplam Taksit Sayısı (Örn: 6)
+  remainingInstallments Int           // Kalan Taksit Sayısı
+  installmentAmount     Float         // Aylık Taksit Tutarı
+  startDate             DateTime      // Başlangıç Tarihi
+  nextDueDate           DateTime      // Bir sonraki taksit vadesi
+  status                String        @default("ACTIVE") // ACTIVE, COMPLETED, CANCELLED
+  notes                 String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+model RecurringBill {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId       String
+  account         Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  categoryId      String
+  category        Category  @relation(fields: [categoryId], references: [id])
+  name            String    // Netflix, Ev Kirası, Turkcell Faturası, Spotify
+  amount          Float     // Düzenli tutar
+  frequency       String    @default("MONTHLY") // MONTHLY, YEARLY, WEEKLY
+  billingDay      Int       @default(1) // Ayın kaçıncı günü
+  nextDueDate     DateTime  // Sonraki ödeme tarihi
+  autoCreateTx    Boolean   @default(true) // Vadesi geldiğinde otomatik işlem oluştursun mu
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model Budget {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  amountLimit Float    // Aylık maksimum harcama hedefi
+  period      String   @default("MONTHLY") // MONTHLY
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, categoryId])
+  @@index([userId])
+}
+
+// -------------------------------------------------------------
+// TAKVİM & ANIMSATICI MODÜLÜ (CALENDAR & REMINDERS)
+// -------------------------------------------------------------
+
+model CalendarEvent {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  startTime       DateTime
+  endTime         DateTime?
+  isAllDay        Boolean   @default(false)
+  reminderMinutes Int?      // Etkinlikten kaç dakika önce anımsatılsın
+  color           String    @default("#3b82f6")
+  sourceModule    String    @default("CALENDAR") // CALENDAR, FINANCE (fatura/taksit), NOTES
+  sourceEntityId  String?   // İlgili modülün entity id'si (örn: installmentPlanId)
+  status          String    @default("ACTIVE") // ACTIVE, COMPLETED, DISMISSED
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([userId, startTime])
+}
+
+// -------------------------------------------------------------
+// NOT ALMA MODÜLÜ (NOTES & TAGS)
+// -------------------------------------------------------------
+
+model Note {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String
+  content         String   // Markdown / Düz Metin içerik
+  tags            String   @default("") // Virgülle ayrılmış etiketler: "finans,fikir,toplanti"
+  isPinned        Boolean  @default(false)
+  color           String   @default("#ffffff")
+  linkedModule    String?  // İsteğe bağlı: FINANCE, CALENDAR
+  linkedEntityId  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// -------------------------------------------------------------
+// KVKK UYUMLU DENETİM & DESTEK GEÇMİŞİ (AUDIT LOGS)
+// -------------------------------------------------------------
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorId      String   // İşlemi yapan Admin veya Müşteri Temsilcisi ID'si
+  actor        User     @relation("AuditActor", fields: [actorId], references: [id])
+  actorEmail   String
+  targetUserId String   // Destek verilen abone ID'si
+  targetUser   User     @relation("AuditTarget", fields: [targetUserId], references: [id])
+  action       String   // SYNC_RETRY, TIER_CHANGED, STATUS_TOGGLED, DIAGNOSTIC_VIEWED
+  details      String   // Maskelenmiş işlem detayı (Asla şifre veya ham kart no içermez)
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+
+  @@index([actorId])
+  @@index([targetUserId])
+  @@index([createdAt])
+}
