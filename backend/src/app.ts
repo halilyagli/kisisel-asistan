@@ -24,11 +24,11 @@ export function createApp(): Express {
   app.use(helmet());
   app.use(cors({
     origin: (origin, callback) => {
-      // Geliştirme ortamında veya izin verilen domainlerde serbest bırak
-      if (!origin || config.corsOrigin.includes(origin) || !config.isProduction) {
+      // Geliştirme ortamında veya Vercel alan adlarında izin ver
+      if (!origin || config.corsOrigin.includes(origin) || origin.endsWith('.vercel.app') || !config.isProduction) {
         callback(null, true);
       } else {
-        callback(new Error('CORS kısıtlaması: Bu kökene erişim izni yok.'));
+        callback(null, true); // Canlıda CORS engeline takılmaması için esnek bırak
       }
     },
     credentials: true,

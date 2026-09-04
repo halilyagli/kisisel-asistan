@@ -4,7 +4,7 @@ import { BankingSyncJob } from './core/jobs/banking-sync.job';
 
 const app = createApp();
 
-const server = app.listen(config.port, () => {
+const server = app.listen(config.port, '0.0.0.0', () => {
   // Açık Bankacılık Otomatik Arka Plan Senkronizasyonunu Başlat
   BankingSyncJob.start();
 
